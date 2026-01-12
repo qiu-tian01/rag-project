@@ -1,0 +1,276 @@
+# 后端技术架构（MVP）
+
+## 1. 核心框架
+
+- **FastAPI**：Python 异步 Web 框架
+  - 高性能异步 IO，适合文档处理与检索
+  - 自动生成 OpenAPI 文档
+  - 类型提示支持，开发体验好
+
+## 2. RAG 框架
+
+- **LlamaIndex**：文档索引与检索框架
+  - 索引与节点模型清晰
+  - 元数据与引用能力强
+  - 适合"文档→章节→需求点"的结构化场景
+
+## 3. 向量数据库
+
+- **FAISS**：Facebook AI Similarity Search
+  - 轻量、高性能、Python 接口简单
+  - 适合 MVP 快速验证
+  - 本地部署，无需额外服务
+  - **后续可扩展**：迁移到 PostgreSQL + pgvector（混合架构）
+
+## 4. Embedding 模型
+
+- **Qwen Embedding v3**：中文优化 Embedding 模型
+  - 针对中文需求文档优化
+  - 支持中英文混合
+  - 语义检索稳定
+
+## 5. 重排模型
+
+- **bge-reranker**：本地部署重排模型
+  - 免费、延迟低、可控性强
+  - 中文支持好
+  - 适合生产环境
+
+## 6. 大模型（LLM）
+
+- **Qwen-Plus**：云泽云 API
+  - 性能与成本平衡
+  - 适合大多数 RAG 场景（query 改写、引用整理、结构化输出）
+  - 中文优化
+
+## 7. MVP 核心功能（最小功能）
+
+### 7.1 文档处理（手动处理）
+- ✅ 本地文档读取（支持 `.docx`、`.pdf`、`.txt`、`.md`）
+- ✅ 文档解析（提取文本、标题层级）
+- ✅ 文档切分（按章节/段落切分，保留层级路径）
+- ✅ 生成 chunk（保留元数据：文档名、章节路径、位置信息）
+
+### 7.2 向量化与索引
+- ✅ Embedding 生成（使用 Qwen Embedding v3）
+- ✅ FAISS 索引构建（存储 chunk_id + embedding）
+- ✅ 元数据存储（本地 JSON 文件，存储 chunk 元数据）
+
+### 7.3 检索服务
+- ✅ 查询向量化（query → embedding）
+- ✅ 向量检索（FAISS 检索 Top-K）
+- ✅ 重排（bge-reranker 重排 Top-K）
+- ✅ 返回检索结果（chunk 文本 + 元数据 + 相似度）
+
+### 7.4 API 接口
+- ✅ 检索接口：`POST /api/v1/search`
+  - 输入：查询文本
+  - 输出：Top-K 检索结果（文档名、章节、文本片段、相似度）
+
+## 8. 项目结构
+
+```
+backend/
+├── app/
+│   ├── main.py              # FastAPI 应用入口
+│   ├── api/
+│   │   └── v1/
+│   │       └── search.py    # 检索 API
+│   ├── services/
+│   │   ├── embedding.py     # Embedding 服务
+│   │   ├── rerank.py        # 重排服务
+│   │   ├── llm.py           # LLM 服务（Qwen-Plus）
+│   │   └── retrieval.py     # 检索服务
+│   ├── models/
+│   │   ├── document.py      # 文档模型
+│   │   └── chunk.py         # Chunk 模型
+│   ├── storage/
+│   │   ├── faiss_index.py   # FAISS 索引管理
+│   │   └── metadata.py     # 元数据存储（JSON）
+│   └── utils/
+│       ├── parser.py        # 文档解析器
+│       └── chunker.py       # 文档切分器
+├── data/
+│   ├── documents/           # 本地文档存储
+│   ├── index/               # FAISS 索引文件
+│   └── metadata/            # 元数据 JSON 文件
+├── requirements.txt
+└── .env                      # 环境变量配置
+```
+
+## 9. 核心流程
+
+### 9.1 文档入库流程（离线）
+```
+1. 手动放置文档到 data/documents/
+2. 运行文档处理脚本
+3. 文档解析 → 提取文本/标题层级
+4. 文档切分 → 生成 chunks（保留元数据）
+5. Embedding 生成 → Qwen Embedding v3
+6. 写入 FAISS 索引（chunk_id + embedding）
+7. 保存元数据到 JSON（chunk_id + 文本 + 元数据）
+```
+
+### 9.2 检索流程（在线）
+```
+1. 接收用户 query
+2. Query Embedding → Qwen Embedding v3
+3. FAISS 向量检索 → 返回 Top-50 chunk_id + 相似度
+4. 从元数据 JSON 加载 chunk 详细信息
+5. 重排（bge-reranker）→ Top-10
+6. 返回结果（文档名、章节、文本片段、相似度）
+```
+
+## 10. 技术选型详情
+
+### 10.1 文档解析
+- **`.docx`**：`python-docx`（提取文本、标题样式、表格）
+- **`.pdf`**：`PyMuPDF`（fitz）或 `pdfplumber`（提取文本、页码）
+- **`.txt` / `.md`**：直接读取文本
+
+### 10.2 文档切分策略
+- **按章节标题切分**：标题作为层级路径
+- **按段落切分**：每段作为一个 chunk
+- **chunk 大小**：300-800 中文字（可配置）
+- **保留元数据**：文档名、章节路径、位置信息
+
+### 10.3 FAISS 索引配置
+- **索引类型**：`IndexFlatL2`（小规模，精确检索）或 `IndexIVFFlat`（中等规模，快速检索）
+- **向量维度**：根据 Qwen Embedding v3 的维度（通常 1024 或 2048）
+- **持久化**：索引保存到本地文件，启动时加载
+
+### 10.4 元数据存储（临时方案）
+- **格式**：JSON 文件
+- **结构**：
+  ```json
+  {
+    "chunks": [
+      {
+        "chunk_id": "xxx",
+        "document_name": "需求文档v1.0",
+        "section_path": ["1 总则", "1.2 范围"],
+        "text": "文档内容...",
+        "position": {"start": 0, "end": 100}
+      }
+    ]
+  }
+  ```
+- **后续扩展**：迁移到 PostgreSQL
+
+## 11. API 接口设计
+
+### 11.1 检索接口
+```
+POST /api/v1/search
+
+Request:
+{
+  "query": "用户登录功能",
+  "top_k": 10
+}
+
+Response:
+{
+  "results": [
+    {
+      "chunk_id": "xxx",
+      "document_name": "需求文档v1.0",
+      "section_path": ["1 总则", "1.2 功能需求"],
+      "text": "用户登录功能需要支持...",
+      "similarity": 0.85
+    }
+  ],
+  "total": 10
+}
+```
+
+## 12. 环境配置
+
+### 12.1 依赖安装
+```bash
+pip install fastapi uvicorn
+pip install llama-index
+pip install faiss-cpu  # 或 faiss-gpu（如果有 GPU）
+pip install python-docx PyMuPDF pdfplumber
+pip install transformers torch  # bge-reranker
+pip install openai  # Qwen API 客户端（或对应 SDK）
+```
+
+### 12.2 环境变量
+```env
+# .env
+# Qwen API 配置
+QWEN_API_KEY=your_api_key
+QWEN_API_BASE_URL=https://api.example.com
+QWEN_MODEL=qwen-plus
+
+# Embedding 配置
+EMBEDDING_MODEL=qwen-embedding-v3
+
+# FAISS 配置
+FAISS_INDEX_PATH=./data/index/faiss.index
+METADATA_PATH=./data/metadata/chunks.json
+
+# 文档路径
+DOCUMENTS_PATH=./data/documents
+```
+
+## 13. MVP 开发优先级
+
+### Phase 1（第1周）
+1. ✅ 项目初始化（FastAPI + 基础结构）
+2. ✅ 文档解析器（支持 docx/pdf/txt/md）
+3. ✅ 文档切分器（按章节/段落切分）
+4. ✅ FAISS 索引构建（文档入库流程）
+
+### Phase 2（第2周）
+1. ✅ Embedding 服务（Qwen Embedding v3 集成）
+2. ✅ 检索服务（FAISS 向量检索）
+3. ✅ 重排服务（bge-reranker 集成）
+4. ✅ 检索 API（POST /api/v1/search）
+
+### Phase 3（后续）
+1. LLM 服务（Qwen-Plus，用于 query 改写、结果整理）
+2. 元数据优化（索引优化、查询性能优化）
+3. 错误处理与日志
+4. 性能优化（缓存、批量处理）
+
+## 14. 后续扩展方向
+
+### 14.1 数据库迁移
+- 从本地 JSON 迁移到 PostgreSQL
+- 从 FAISS 迁移到 PostgreSQL + pgvector（混合架构）
+- 支持更复杂的元数据查询
+
+### 14.2 功能扩展
+- 文档自动同步（飞书 API 集成）
+- 版本管理
+- 增量更新
+- 混合检索（向量 + 全文检索）
+- 权限管理
+
+### 14.3 存储扩展
+- 对象存储（MinIO/阿里云 OSS）
+- 支持更多文档格式（HTML、OCR）
+
+## 15. 注意事项
+
+### 15.1 性能优化
+- FAISS 索引加载到内存，提升检索速度
+- Embedding 批量处理，减少 API 调用
+- 重排模型本地部署，避免网络延迟
+
+### 15.2 数据一致性
+- FAISS 索引与元数据 JSON 需保持同步
+- chunk_id 作为唯一标识，确保一致性
+
+### 15.3 错误处理
+- 文档解析失败处理
+- Embedding API 调用失败重试
+- FAISS 索引损坏恢复
+
+### 15.4 可扩展性
+- 设计时考虑后续迁移到 PostgreSQL
+- 元数据结构设计便于扩展
+- API 接口设计保持向后兼容
+
