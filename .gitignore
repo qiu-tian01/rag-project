@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 
 # env
 .env
+
+# RAG-cy folder
+RAG-cy/
